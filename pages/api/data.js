@@ -22,35 +22,44 @@ export default async function handler(req, res) {
     const { category } = req.query;
     if (!category) return res.status(400).json({ error: 'category required' });
 
-    const { data, error } = await supabase
-      .from('tracker_data')
-      .select('data')
-      .eq('category', category)
-      .single();
+    try {
+      const { data, error } = await supabase
+        .from('tracker_data')
+        .select('data')
+        .eq('category', category)
+        .single();
 
-    if (error && error.code !== 'PGRST116') {
-      return res.status(500).json({ error: error.message });
+      if (error && error.code !== 'PGRST116') {
+        return res.status(500).json({ error: error.message });
+      }
+
+      const result = data?.data;
+      return res.json({ data: result !== null && result !== undefined ? result : [] });
+    } catch (e) {
+      return res.status(500).json({ error: e.message });
     }
-
-    return res.json({ data: data?.data || [] });
   }
 
   if (req.method === 'POST') {
     const { category, data: payload } = req.body;
     if (!category) return res.status(400).json({ error: 'category required' });
 
-    const { error } = await supabase
-      .from('tracker_data')
-      .upsert(
-        { category, data: payload, updated_at: new Date().toISOString() },
-        { onConflict: 'category' }
-      );
+    try {
+      const { error } = await supabase
+        .from('tracker_data')
+        .upsert(
+          { category, data: payload, updated_at: new Date().toISOString() },
+          { onConflict: 'category' }
+        );
 
-    if (error) {
-      return res.status(500).json({ error: error.message });
+      if (error) {
+        return res.status(500).json({ error: error.message });
+      }
+
+      return res.json({ ok: true });
+    } catch (e) {
+      return res.status(500).json({ error: e.message });
     }
-
-    return res.json({ ok: true });
   }
 
   res.status(405).end();
