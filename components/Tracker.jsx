@@ -118,14 +118,14 @@ function DashPage({ w, act, sl, wa, set, comp }) {
   const l7 = act.filter(a => (new Date() - new Date(a.date)) < 7 * 864e5);
   const streak = (() => { let c = 0, d = new Date(); for (let i = 0; i < 60; i++) { const ds = d.toISOString().slice(0, 10); if (act.some(a => a.date === ds)) c++; else if (i > 0) break; d.setDate(d.getDate() - 1); } return c; })();
   const avgS = (() => { const r = sl.filter(s => (new Date() - new Date(s.date)) < 7 * 864e5); return r.length ? (r.reduce((a, b) => a + b.hours, 0) / r.length).toFixed(1) : 0; })();
-  const tw = wa.find(x => x.date === td())?.glasses || 0;
+  const tw = wa.find(x => x.date === td())?.bottles || 0;
   const wkD = []; for (let i = 0; i < 7; i++) { const d = new Date(); d.setDate(d.getDate() - i); wkD.push(d.toISOString().slice(0, 10)); }
   const wkC = wkD.map(d => comp.find(c => c.date === d)).filter(Boolean);
-  const flw = wkC.filter(c => c.status === "yes").length;
+  const flw = wkC.filter(c => c.b && c.l && c.s).length;
 
   const ins = [];
   if (avgS && avgS < 7) ins.push({ i: "😴", t: "Сон <7ч → кортизол↑" });
-  if (tw < 6) ins.push({ i: "💧", t: `${tw}/8 стаканов воды` });
+  if (tw < 2) ins.push({ i: "💧", t: `${tw * 750}мл воды — нужно ещё (цель 2+ л)` });
   if (l7.length < 4) ins.push({ i: "🏃‍♀️", t: `${l7.length} тренировок (нужно 4-5)` });
   if (streak >= 5) ins.push({ i: "🔥", t: `${streak} дней подряд!` });
   if (flw >= 5) ins.push({ i: "🌟", t: `${flw}/7 по плану — отлично!` });
@@ -147,7 +147,7 @@ function DashPage({ w, act, sl, wa, set, comp }) {
         <div style={{ fontSize: "11px", color: "#8a8279", textAlign: "right", marginTop: "3px" }}>{pct}%</div>
       </Card>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "6px" }}>
-        {[{ v: streak, l: "🔥 серия" }, { v: `${l7.length}/5`, l: "🏃‍♀️ нед." }, { v: `${avgS || "—"}ч`, l: "😴 сон" }, { v: `${tw}/8`, l: "💧 вода" }, { v: `${flw}/7`, l: "🍽️ меню" }, { v: wkC.filter(c => c.status === "partial").length, l: "🟡 частич." }].map((x, i) => (
+        {[{ v: streak, l: "🔥 серия" }, { v: `${l7.length}/5`, l: "🏃‍♀️ нед." }, { v: `${avgS || "—"}ч`, l: "😴 сон" }, { v: `${tw*750}мл`, l: "💧 вода" }, { v: `${flw}/7`, l: "🍽️ меню" }, { v: wkC.filter(c => { const n=[c.b,c.l,c.s].filter(Boolean).length; return n>0&&n<3; }).length, l: "🟡 частич." }].map((x, i) => (
           <Card key={i} style={{ textAlign: "center", padding: "8px" }}><div style={{ fontSize: "16px", fontWeight: 600, color: "#e8e4df" }}>{x.v}</div><div style={{ fontSize: "9px", color: "#8a8279" }}>{x.l}</div></Card>
         ))}
       </div>
@@ -177,23 +177,52 @@ function MealPage({ mw, setMw, comp, setComp }) {
   const week = MEALS_4W[mw]; const shop = SHOPPING[mw];
   const switchW = async w => { setMw(w); await sv("mealWeek", w); };
   const getD = i => { const now = new Date(); const dow = now.getDay(); const mon = new Date(now); mon.setDate(now.getDate() - (dow === 0 ? 6 : dow - 1)); const d = new Date(mon); d.setDate(mon.getDate() + i); return d.toISOString().slice(0, 10); };
-  const setC = async (i, s) => { const date = getD(i); const n = [...comp.filter(c => c.date !== date), { date, status: s }].sort((a, b) => a.date.localeCompare(b.date)); setComp(n); await sv("compliance", n); };
-  const getC = i => comp.find(c => c.date === getD(i))?.status || null;
-  const ci = { yes: "✅", partial: "🟡", no: "❌" }; const cl = { yes: "По плану", partial: "Частично", no: "Нарушила" }; const cc = { yes: "#7eb89a", partial: "#d4a867", no: "#c47a7a" };
+  const mealKeys = ["b", "l", "s"];
+  const getComp = i => {
+    const c = comp.find(x => x.date === getD(i));
+    if (!c) return null;
+    // Handle legacy format {status: "yes"} → convert to {b,l,s}
+    if (c.status !== undefined && c.b === undefined) {
+      return { date: c.date, b: c.status === "yes", l: c.status === "yes", s: c.status === "yes" };
+    }
+    return { date: c.date, b: !!c.b, l: !!c.l, s: !!c.s };
+  };
+  const toggleMeal = async (dayIdx, mealKey) => {
+    const date = getD(dayIdx);
+    const existing = getComp(dayIdx) || { date, b: false, l: false, s: false };
+    const updated = { date, b: existing.b, l: existing.l, s: existing.s, [mealKey]: !existing[mealKey] };
+    const n = [...comp.filter(c => c.date !== date), updated].sort((a, b) => a.date.localeCompare(b.date));
+    setComp(n); await sv("compliance", n);
+  };
+  const getDayStatus = i => {
+    const c = getComp(i); if (!c) return null;
+    const checked = [c.b, c.l, c.s].filter(Boolean).length;
+    if (checked === 3) return "yes"; if (checked > 0) return "partial"; return null;
+  };
+  const ci = { yes: "✅", partial: "🟡" }; const cc = { yes: "#7eb89a", partial: "#d4a867", no: "#c47a7a" };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
       <Card><Lb>Неделя</Lb><div style={{ display: "flex", gap: "6px" }}>{[0, 1, 2, 3].map(i => (<Btn key={i} variant={mw === i ? "primary" : "secondary"} onClick={() => switchW(i)} style={{ padding: "8px 16px", fontSize: "13px" }}>{i + 1}</Btn>))}</div></Card>
-      {week.map((d, i) => { const total = d.b.kcal + d.l.kcal + d.s.kcal; const prot = d.b.prot + d.l.prot + d.s.prot; const open = exp === i; const cp = getC(i);
-        return (<Card key={i} style={{ padding: 0, overflow: "hidden" }}><div onClick={() => setExp(open ? -1 : i)} style={{ padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}><div style={{ display: "flex", alignItems: "center", gap: "8px" }}><span style={{ fontSize: "14px", fontWeight: 600, color: "#e8e4df" }}>{d.day}</span>{cp && <span>{ci[cp]}</span>}</div><div style={{ display: "flex", gap: "8px", alignItems: "center" }}><span style={{ fontSize: "11px", color: "#a89f94", background: "rgba(255,255,255,0.05)", padding: "3px 8px", borderRadius: "6px" }}>{total}</span><span style={{ fontSize: "11px", color: "#7eb89a", background: "rgba(126,184,154,0.1)", padding: "3px 8px", borderRadius: "6px" }}>{prot}г</span><span style={{ color: "#6b635a", fontSize: "11px", transform: open ? "rotate(180deg)" : "none" }}>▼</span></div></div>
+      {week.map((d, i) => { const total = d.b.kcal + d.l.kcal + d.s.kcal; const prot = d.b.prot + d.l.prot + d.s.prot; const open = exp === i; const ds = getDayStatus(i); const dc = getComp(i);
+        return (<Card key={i} style={{ padding: 0, overflow: "hidden" }}><div onClick={() => setExp(open ? -1 : i)} style={{ padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}><div style={{ display: "flex", alignItems: "center", gap: "8px" }}><span style={{ fontSize: "14px", fontWeight: 600, color: "#e8e4df" }}>{d.day}</span>{ds && <span>{ci[ds]}</span>}</div><div style={{ display: "flex", gap: "8px", alignItems: "center" }}><span style={{ fontSize: "11px", color: "#a89f94", background: "rgba(255,255,255,0.05)", padding: "3px 8px", borderRadius: "6px" }}>{total}</span><span style={{ fontSize: "11px", color: "#7eb89a", background: "rgba(126,184,154,0.1)", padding: "3px 8px", borderRadius: "6px" }}>{prot}г</span><span style={{ color: "#6b635a", fontSize: "11px", transform: open ? "rotate(180deg)" : "none" }}>▼</span></div></div>
           {open && (<div style={{ padding: "0 14px 12px", display: "flex", flexDirection: "column", gap: "8px" }}>
-            {[{ l: "Завтрак 7:00", m: d.b, c: "#d4a867" }, { l: "Обед 12:00", m: d.l, c: "#7eb89a" }, { l: "Перекус 15:30", m: d.s, c: "#8a9bb5" }].map(({ l, m, c }, mi) => (<div key={l} style={{ background: "rgba(0,0,0,0.15)", borderRadius: "10px", padding: "10px 12px", borderLeft: `3px solid ${c}` }}><div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}><span style={{ fontSize: "10px", fontWeight: 600, color: c, textTransform: "uppercase", letterSpacing: "0.5px" }}>{l}</span><span style={{ fontSize: "10px", color: "#8a8279" }}>{m.kcal} ккал · {m.prot}г</span></div><div style={{ fontSize: "13px", color: "#c4bdb4", lineHeight: 1.6 }}>{m.items}</div>
+            {[{ l: "Завтрак 7:00", m: d.b, c: "#d4a867", k: "b" }, { l: "Обед 12:00", m: d.l, c: "#7eb89a", k: "l" }, { l: "Перекус 15:30", m: d.s, c: "#8a9bb5", k: "s" }].map(({ l, m, c, k }, mi) => {
+              const checked = dc && dc[k];
+              return (<div key={l} style={{ background: "rgba(0,0,0,0.15)", borderRadius: "10px", padding: "10px 12px", borderLeft: `3px solid ${checked ? "#7eb89a" : c}` }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                  <span style={{ fontSize: "10px", fontWeight: 600, color: c, textTransform: "uppercase", letterSpacing: "0.5px" }}>{l}</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <span style={{ fontSize: "10px", color: "#8a8279" }}>{m.kcal} ккал · {m.prot}г</span>
+                    <button onClick={e => { e.stopPropagation(); toggleMeal(i, k); }} style={{ width: "28px", height: "28px", borderRadius: "7px", border: checked ? "1px solid #7eb89a" : "1px solid rgba(255,255,255,0.15)", background: checked ? "rgba(126,184,154,0.2)" : "rgba(255,255,255,0.03)", cursor: "pointer", fontSize: "14px", display: "flex", alignItems: "center", justifyContent: "center", padding: 0 }}>{checked ? "✅" : ""}</button>
+                  </div>
+                </div>
+                <div style={{ fontSize: "13px", color: "#c4bdb4", lineHeight: 1.6 }}>{m.items}</div>
               {m.swap?.length > 0 && (<div style={{ marginTop: "6px" }}><button onClick={e => { e.stopPropagation(); setSwp(swp === `${i}-${mi}` ? null : `${i}-${mi}`); }} style={{ background: "none", border: "1px solid rgba(255,255,255,0.1)", borderRadius: "6px", padding: "4px 10px", color: "#8a8279", fontSize: "11px", cursor: "pointer", fontFamily: "'DM Sans'" }}>🔄 Замены</button>{swp === `${i}-${mi}` && (<div style={{ marginTop: "6px", background: "rgba(0,0,0,0.2)", borderRadius: "8px", padding: "8px 10px" }}>{m.swap.map(sk => { const s = SWAPS[sk]; if (!s) return null; return (<div key={sk} style={{ marginBottom: "4px" }}><span style={{ fontSize: "11px", color: "#d4a867" }}>{s.main}</span><span style={{ fontSize: "11px", color: "#6b635a" }}> → </span><span style={{ fontSize: "11px", color: "#a89f94" }}>{s.alts.join(" / ")}</span></div>); })}</div>)}</div>)}
-            </div>))}
-            <div style={{ display: "flex", gap: "6px", justifyContent: "center", marginTop: "4px" }}>{["yes", "partial", "no"].map(s => (<button key={s} onClick={e => { e.stopPropagation(); setC(i, s); }} style={{ padding: "6px 12px", borderRadius: "8px", fontSize: "12px", cursor: "pointer", fontFamily: "'DM Sans'", border: cp === s ? `1px solid ${cc[s]}` : "1px solid rgba(255,255,255,0.08)", background: cp === s ? `${cc[s]}20` : "rgba(255,255,255,0.03)", color: cp === s ? cc[s] : "#8a8279" }}>{ci[s]} {cl[s]}</button>))}</div>
+            </div>);})}
           </div>)}</Card>);
       })}
-      <Card><Lb>Следование (неделя)</Lb><div style={{ display: "flex", gap: "4px", justifyContent: "center" }}>{week.map((d, i) => { const c = getC(i); return (<div key={i} style={{ width: "36px", height: "36px", borderRadius: "8px", display: "flex", alignItems: "center", justifyContent: "center", background: c ? `${cc[c]}20` : "rgba(255,255,255,0.05)", border: c ? `1px solid ${cc[c]}40` : "1px solid rgba(255,255,255,0.08)", fontSize: "11px", color: c ? cc[c] : "#6b635a", fontWeight: 600 }}>{c ? ci[c] : d.day}</div>); })}</div></Card>
+      <Card><Lb>Следование (неделя)</Lb><div style={{ display: "flex", gap: "4px", justifyContent: "center" }}>{week.map((d, i) => { const ds = getDayStatus(i); const col = ds ? cc[ds] : null; return (<div key={i} style={{ width: "36px", height: "36px", borderRadius: "8px", display: "flex", alignItems: "center", justifyContent: "center", background: col ? `${col}20` : "rgba(255,255,255,0.05)", border: col ? `1px solid ${col}40` : "1px solid rgba(255,255,255,0.08)", fontSize: "11px", color: col || "#6b635a", fontWeight: 600 }}>{ds ? ci[ds] : d.day}</div>); })}</div></Card>
       <Btn onClick={() => setShowL(!showL)} style={{ width: "100%" }}>{showL ? "Скрыть" : "🛒 Список покупок"}</Btn>
       {showL && (<Card><Lb>Покупки — Неделя {mw + 1}</Lb>{[{ l: "🥩 Белок", it: shop.protein }, { l: "🥬 Овощи", it: shop.vegs }, { l: "🌾 Крупы", it: shop.carbs }, { l: "🧂 Прочее", it: shop.other }].map(({ l, it }) => (<div key={l} style={{ marginBottom: "10px" }}><div style={{ fontSize: "12px", fontWeight: 600, color: "#d4a867", marginBottom: "3px" }}>{l}</div>{it.map((x, j) => (<div key={j} style={{ fontSize: "12px", color: "#c4bdb4", padding: "2px 0" }}>▪ {x}</div>))}</div>))}</Card>)}
     </div>
@@ -230,15 +259,30 @@ function ProcPage({ proc, setProc }) {
 
 function SlWaPage({ sl, setSl, wa, setWa }) {
   const [sh, setSh] = useState(""); const [sd, setSd] = useState(td());
-  const tw = wa.find(w => w.date === td())?.glasses || 0;
+  const tw = wa.find(w => w.date === td())?.bottles || 0;
   const addS = async () => { if (!sh) return; const n = [...sl.filter(s => s.date !== sd), { date: sd, hours: parseFloat(sh) }].sort((a, b) => a.date.localeCompare(b.date)); setSl(n); await sv("sleep", n); setSh(""); };
   const rmS = async d => { const n = sl.filter(s => s.date !== d); setSl(n); await sv("sleep", n); };
-  const setW = async g => { const d = td(); const n = [...wa.filter(w => w.date !== d), { date: d, glasses: g }]; setWa(n); await sv("water", n); };
+  const setW = async b => { const d = td(); const n = [...wa.filter(w => w.date !== d), { date: d, bottles: b }]; setWa(n); await sv("water", n); };
   const sc = sl.slice(-14).map(s => ({ date: fD(s.date), hours: s.hours }));
   const a7 = (() => { const r = sl.filter(s => (new Date() - new Date(s.date)) < 7 * 864e5); return r.length ? (r.reduce((a, b) => a + b.hours, 0) / r.length).toFixed(1) : "—"; })();
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-      <Card><Lb>💧 Вода</Lb><div style={{ display: "flex", gap: "6px", justifyContent: "center", marginBottom: "6px" }}>{[1, 2, 3, 4, 5, 6, 7, 8].map(g => (<button key={g} onClick={() => setW(g)} style={{ width: "34px", height: "34px", borderRadius: "8px", border: "none", cursor: "pointer", fontSize: "15px", background: g <= tw ? "rgba(100,180,220,0.25)" : "rgba(255,255,255,0.05)", color: g <= tw ? "#64b4dc" : "#5a534b" }}>💧</button>))}</div><div style={{ textAlign: "center", fontSize: "13px", color: tw >= 6 ? "#7eb89a" : "#c47a7a" }}>{tw}/8{tw >= 8 ? " ✅" : ""}</div></Card>
+      <Card><Lb>💧 Вода (750 мл)</Lb>
+        <div style={{ display: "flex", gap: "10px", justifyContent: "center", alignItems: "center", marginBottom: "8px" }}>
+          <button onClick={() => tw > 0 && setW(tw - 1)} style={{ width: "40px", height: "40px", borderRadius: "10px", border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.05)", color: "#a89f94", fontSize: "20px", cursor: "pointer", fontFamily: "'DM Sans'" }}>−</button>
+          <div style={{ textAlign: "center", minWidth: "80px" }}>
+            <div style={{ fontSize: "28px", fontWeight: 700, color: "#e8e4df" }}>{tw}</div>
+            <div style={{ fontSize: "11px", color: "#8a8279" }}>{tw * 750} мл</div>
+          </div>
+          <button onClick={() => setW(tw + 1)} style={{ width: "40px", height: "40px", borderRadius: "10px", border: "1px solid rgba(100,180,220,0.3)", background: "rgba(100,180,220,0.15)", color: "#64b4dc", fontSize: "20px", cursor: "pointer", fontFamily: "'DM Sans'" }}>+</button>
+        </div>
+        <div style={{ display: "flex", gap: "6px", justifyContent: "center" }}>
+          {[1, 2, 3].map(b => (<button key={b} onClick={() => setW(tw === b ? 0 : b)} style={{ padding: "6px 14px", borderRadius: "8px", border: tw === b ? "1px solid rgba(100,180,220,0.4)" : "1px solid rgba(255,255,255,0.08)", background: tw >= b ? "rgba(100,180,220,0.15)" : "rgba(255,255,255,0.03)", color: tw >= b ? "#64b4dc" : "#6b635a", fontSize: "12px", cursor: "pointer", fontFamily: "'DM Sans'" }}>🍶 {b}</button>))}
+        </div>
+        <div style={{ textAlign: "center", fontSize: "12px", marginTop: "6px", color: tw >= 3 ? "#7eb89a" : tw >= 2 ? "#d4a867" : "#c47a7a" }}>
+          {tw >= 3 ? "✅ Норма!" : tw >= 2 ? "👍 Почти" : "Нужно ещё"} · цель: 2+ л
+        </div>
+      </Card>
       <Card><Lb>😴 Сон</Lb><div style={{ display: "flex", gap: "8px", alignItems: "center" }}><Inp type="date" value={sd} onChange={setSd} style={{ flex: 1 }} /><Inp type="number" value={sh} onChange={setSh} placeholder="ч" style={{ width: "65px", flex: "none" }} /><Btn onClick={addS} disabled={!sh}>+</Btn></div><div style={{ marginTop: "6px", fontSize: "12px", color: "#8a8279" }}>Среднее 7дн: <span style={{ color: a7 >= 7 ? "#7eb89a" : "#c47a7a", fontWeight: 600 }}>{a7}ч</span></div></Card>
       {sc.length > 1 && (<Card><Lb>График сна</Lb><ResponsiveContainer width="100%" height={120}><AreaChart data={sc} margin={{ top: 5, right: 5, bottom: 0, left: -20 }}><defs><linearGradient id="sg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#8a9bb5" stopOpacity={0.3} /><stop offset="100%" stopColor="#8a9bb5" stopOpacity={0} /></linearGradient></defs><CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" /><XAxis dataKey="date" tick={{ fill: "#6b635a", fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: "#6b635a", fontSize: 10 }} axisLine={false} tickLine={false} domain={[4, 10]} /><Tooltip contentStyle={tts} /><Area type="monotone" dataKey="hours" stroke="#8a9bb5" fill="url(#sg)" strokeWidth={2} /></AreaChart></ResponsiveContainer></Card>)}
       <Card><Lb>Записи</Lb><div style={{ maxHeight: "150px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "3px" }}>{[...sl].reverse().slice(0, 10).map((s, i) => (<div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 10px", background: "rgba(0,0,0,0.15)", borderRadius: "8px", fontSize: "13px" }}><span style={{ color: "#8a8279" }}>{fDF(s.date)}</span><div style={{ display: "flex", alignItems: "center", gap: "8px" }}><span style={{ color: s.hours >= 7 ? "#7eb89a" : "#c47a7a", fontWeight: 600 }}>{s.hours}ч</span><XBtn onClick={() => rmS(s.date)} /></div></div>))}</div></Card>
